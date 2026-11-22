@@ -4,7 +4,7 @@ from email.utils import formataddr
 from playwright.async_api import async_playwright
 from openai import OpenAI
 
-# --- 1. الإعدادات (رح نحطها بالخزنة لاحقاً) ---
+# --- 1. الإعدادات ---
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -16,7 +16,6 @@ AGENT_EMAIL = "contact@agentscan.com"
 ai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 bot = telebot.TeleBot(TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
 
-# دالة المسح
 async def scan_site(url):
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -34,7 +33,6 @@ async def scan_site(url):
         finally:
             await browser.close()
 
-# دالة إرسال الإيميل
 def send_email(to_email, company_name, issues):
     if not to_email or not SMTP_USER: return
     subject = f"تقرير مسح رقمي سريع — {company_name}"
@@ -60,25 +58,22 @@ def send_email(to_email, company_name, issues):
     except Exception as e:
         print(f"❌ فشل إرسال الإيميل: {e}")
 
-# دورة المسح اليومية
-async def scan_loop():
+async def run_scan():
     print("🚀 الوكيل بدأ المسح...")
-    while True:
-        try:
-            with open("companies.csv", "r", encoding="utf-8") as f:
-                companies = list(csv.DictReader(f))
-            for comp in companies:
-                if not comp.get('website'): continue
-                issues = await scan_site(comp['website'])
-                if issues and comp.get('email'):
-                    send_email(comp['email'], comp['name'], issues)
-                await asyncio.sleep(10)
-            await asyncio.sleep(86400) # انتظار 24 ساعة
-        except Exception as e:
-            print(f"Loop error: {e}")
-            await asyncio.sleep(60)
+    try:
+        with open("companies.csv", "r", encoding="utf-8") as f:
+            companies = list(csv.DictReader(f))
+        for comp in companies:
+            if not comp.get('website'): continue
+            print(f"🔍 جاري فحص: {comp['name']}...")
+            issues = await scan_site(comp['website'])
+            if issues and comp.get('email'):
+                send_email(comp['email'], comp['name'], issues)
+            await asyncio.sleep(5) # انتظار 5 ثواني بين كل موقع
+        print("✅ انتهى المسح بنجاح.")
+    except Exception as e:
+        print(f"Loop error: {e}")
 
-# --- 3. بوت التلغرام (المبيعات والتفاوض) ---
 if bot:
     @bot.message_handler(func=lambda message: True)
     def handle_message(message):
@@ -93,10 +88,9 @@ if bot:
         قواعد صارمة جداً:
         1. ممنوع تماماً ذكر أي أسعار أو أرقام مالية.
         2. أسلوبك راقٍ، دافئ، ومقنع جداً.
-        3. إذا سألك عن الخدمات، اشرح بإيجاز إننا نكشف الثغرات التقنية ونحسن التواجد الرقمي.
-        4. إذا وافق على الخدمة، اطلب منه تسجيل الدخول للموقع لاختيار الباقة المناسبة (شهري/سنوي) والمساحة المطلوبة.
-        5. اجعل الردود قصيرة (لا تتجاوز 3 أسطر).
-        6. اختم أي رد بعبارة "معك جهاد."
+        3. إذا وافق على الخدمة، اطلب منه تسجيل الدخول للموقع لاختيار الباقة المناسبة (شهري/سنوي).
+        4. اجعل الردود قصيرة (لا تتجاوز 3 أسطر).
+        5. اختم أي رد بعبارة "معك جهاد."
         """
         try:
             response = ai_client.chat.completions.create(
@@ -108,12 +102,14 @@ if bot:
             print(f"AI Error: {e}")
             bot.reply_to(message, "عذراً، حدث خطأ تقني بسيط.")
 
-# --- 4. التشغيل الرئيسي ---
 if __name__ == "__main__":
-    # تشغيل التلغرام في الخلفية
-    if bot:
-        threading.Thread(target=bot.infinity_polling, daemon=True).start()
-        print("📱 بوت التلغرام شغال وجاهز للرد...")
+    # 1. تشغيل المسح مرة واحدة
+    asyncio.run(run_scan())
     
-    # تشغيل المسح
-    asyncio.run(scan_loop())
+    # 2. تشغيل التلغرام لدقيقة واحدة فقط لالتقاط أي رسائل، وبعدها يطفي
+    if bot:
+        print("📱 بوت التلغرام يقرأ الرسائل لمدة دقيقة...")
+        t = threading.Thread(target=bot.polling, kwargs={'none_stop': True})
+        t.start()
+        time.sleep(60) # يشتغل دقيقة وبعدها ينهي العملية
+        print("⏹️ إيقاف بوت التلغرام. انتهت الدورة.")

@@ -1,4 +1,4 @@
-import os, csv, time, smtplib, asyncio, threading, telebot
+import os, csv, time, smtplib, asyncio, threading, telebot, sys
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from playwright.async_api import async_playwright
@@ -69,7 +69,7 @@ async def run_scan():
             issues = await scan_site(comp['website'])
             if issues and comp.get('email'):
                 send_email(comp['email'], comp['name'], issues)
-            await asyncio.sleep(5) # انتظار 5 ثواني بين كل موقع
+            await asyncio.sleep(5)
         print("✅ انتهى المسح بنجاح.")
     except Exception as e:
         print(f"Loop error: {e}")
@@ -103,13 +103,15 @@ if bot:
             bot.reply_to(message, "عذراً، حدث خطأ تقني بسيط.")
 
 if __name__ == "__main__":
-    # 1. تشغيل المسح مرة واحدة
     asyncio.run(run_scan())
     
-    # 2. تشغيل التلغرام لدقيقة واحدة فقط لالتقاط أي رسائل، وبعدها يطفي
     if bot:
         print("📱 بوت التلغرام يقرأ الرسائل لمدة دقيقة...")
-        t = threading.Thread(target=bot.polling, kwargs={'none_stop': True})
+        t = threading.Thread(target=bot.polling, kwargs={'none_stop': True}, daemon=True) # ضفنا daemon=True
         t.start()
-        time.sleep(60) # يشتغل دقيقة وبعدها ينهي العملية
+        time.sleep(60)
         print("⏹️ إيقاف بوت التلغرام. انتهت الدورة.")
+    
+    # هاد السطر الجديد اللي بيجبر النظام يسكّر ويطلع علامة نجاح
+    print("🎉 انتهى كل شيء بنجاح. إغلاق النظام.")
+    sys.exit(0)

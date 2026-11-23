@@ -9,9 +9,9 @@ SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-AGENT_TELEGRAM = "@YourTelegramBot"
-AGENT_EMAIL = "contact@agentscan.com"
 
+AGENT_TELEGRAM = "@jihad_ai_2_bot"  # أو أي يوزرنيم للبوت اللي عملته
+AGENT_EMAIL = "jihadmmouhammad@gmail.com"
 # --- 2. تجهيز الذكاء الاصطناعي والتلغرام ---
 ai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 bot = telebot.TeleBot(TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None

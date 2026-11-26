@@ -28,29 +28,28 @@ def mark_processed(website):
     with open(PROCESSED_FILE, "a", encoding="utf-8") as f:
         f.write(f"{website}\n")
 
-# دالة ذكية للبحث عن الإيميل داخل الموقع
 async def find_email_on_site(page, url):
     email_regex = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
     try:
         await page.goto(url, timeout=30000, wait_until="domcontentloaded")
         
-        # 1. البحث في الصفحة الرئيسية
         content = await page.content()
-        emails = re.findall(email_regex, content)
-        if emails:
-            return emails[0]
+        if content: # تأكدنا إنه المحتوى مش فاضي
+            emails = re.findall(email_regex, content)
+            if emails:
+                return emails[0]
 
-        # 2. البحث في صفحة "اتصل بنا"
         links = await page.eval_on_selector_all("a", "els => els.map(e => e.href)")
-        contact_links = [l for l in links if any(k in l.lower() for k in ["contact", "اتصل", "about", "من-نحن"])]
+        contact_links = [l for l in links if l and any(k in l.lower() for k in ["contact", "اتصل", "about", "من-نحن"])]
         
-        for link in contact_links[:2]: # نفحص أول رابطين بس عشان ما نضيع وقت
+        for link in contact_links[:2]:
             try:
                 await page.goto(link, timeout=15000, wait_until="domcontentloaded")
                 content = await page.content()
-                emails = re.findall(email_regex, content)
-                if emails:
-                    return emails[0]
+                if content:
+                    emails = re.findall(email_regex, content)
+                    if emails:
+                        return emails[0]
             except:
                 continue
         return None
@@ -118,7 +117,11 @@ async def run_scan():
             print(f"🔍 جاري فحص: {comp['name']}...")
             issues, found_email = await scan_site(comp['website'])
             
-            target_email = comp.get('email', '').strip() or found_email
+            target_email = comp.get('email', '')
+            if target_email:
+                target_email = target_email.strip() or found_email
+            else:
+                target_email = found_email
             
             if issues and target_email:
                 send_email(target_email, comp['name'], issues)

@@ -1,4 +1,4 @@
-import os, csv, time, smtplib, asyncio, threading, telebot, sys
+import os, csv, time, smtplib, asyncio, threading, telebot, sys, re
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from playwright.async_api import async_playwright
@@ -16,7 +16,6 @@ AGENT_EMAIL = "jihadmmouhammad@gmail.com"
 ai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 bot = telebot.TeleBot(TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
 
-# ملف لحفظ الشركات اللي انمسحت عشان ما نكرر الإيميل
 PROCESSED_FILE = "processed_companies.txt"
 
 def load_processed():
@@ -29,20 +28,53 @@ def mark_processed(website):
     with open(PROCESSED_FILE, "a", encoding="utf-8") as f:
         f.write(f"{website}\n")
 
+# دالة ذكية للبحث عن الإيميل داخل الموقع
+async def find_email_on_site(page, url):
+    email_regex = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+    try:
+        await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        
+        # 1. البحث في الصفحة الرئيسية
+        content = await page.content()
+        emails = re.findall(email_regex, content)
+        if emails:
+            return emails[0]
+
+        # 2. البحث في صفحة "اتصل بنا"
+        links = await page.eval_on_selector_all("a", "els => els.map(e => e.href)")
+        contact_links = [l for l in links if any(k in l.lower() for k in ["contact", "اتصل", "about", "من-نحن"])]
+        
+        for link in contact_links[:2]: # نفحص أول رابطين بس عشان ما نضيع وقت
+            try:
+                await page.goto(link, timeout=15000, wait_until="domcontentloaded")
+                content = await page.content()
+                emails = re.findall(email_regex, content)
+                if emails:
+                    return emails[0]
+            except:
+                continue
+        return None
+    except:
+        return None
+
 async def scan_site(url):
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
         try:
+            found_email = await find_email_on_site(page, url)
+            
             await page.goto(url, timeout=30000, wait_until="domcontentloaded")
             title = await page.title()
-            has_contact = "contact" in (await page.content()).lower()
+            has_contact = "contact" in (await page.content()).lower() or found_email is not None
+            
             issues = []
             if not title: issues.append("عنوان الصفحة مفقود.")
             if not has_contact: issues.append("لا توجد صفحة تواصل واضحة.")
-            return issues if issues else ["ملاحظات تقنية لتحسين الموقع."]
+            
+            return (issues if issues else ["ملاحظات تقنية لتحسين الموقع."]), found_email
         except Exception:
-            return []
+            return [], None
         finally:
             await browser.close()
 
@@ -67,71 +99,45 @@ def send_email(to_email, company_name, issues):
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
             server.send_message(msg)
-            print(f"✅ تم إرسال إيميل لـ: {company_name}")
+            print(f"✅ تم إرسال إيميل لـ: {company_name} على {to_email}")
     except Exception as e:
         print(f"❌ فشل إرسال الإيميل: {e}")
 
 async def run_scan():
-    print("🚀 الوكيل بدأ المسح...")
+    print("🚀 الوكيل بدأ المسح والصيد...")
     processed = load_processed()
     try:
         with open("companies.csv", "r", encoding="utf-8") as f:
             companies = list(csv.DictReader(f))
         for comp in companies:
             if not comp.get('website'): continue
-            
-            # إذا الشركة انمسحت من قبل، تخطاها
             if comp['website'] in processed:
                 print(f"⏩ تم تخطي {comp['name']} (تم مسحه سابقاً).")
                 continue
                 
             print(f"🔍 جاري فحص: {comp['name']}...")
-            issues = await scan_site(comp['website'])
-            if issues and comp.get('email'):
-                send_email(comp['email'], comp['name'], issues)
+            issues, found_email = await scan_site(comp['website'])
+            
+            target_email = comp.get('email', '').strip() or found_email
+            
+            if issues and target_email:
+                send_email(target_email, comp['name'], issues)
+            elif not target_email:
+                print(f"⚠️ لم يتم العثور على إيميل لـ {comp['name']}")
                 
-            mark_processed(comp['website']) # حفظ إنه انمسح
+            mark_processed(comp['website'])
             await asyncio.sleep(5)
         print("✅ انتهى المسح بنجاح.")
     except Exception as e:
         print(f"Loop error: {e}")
 
-# --- 3. وكيل الصيد (AliExpress Hunter) ---
-async def hunt_aliexpress():
-    print("🕵️‍♂️ الوكيل الصياد بدأ البحث...")
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        try:
-            await page.goto("https://www.aliexpress.com/category/100003070/consumer-electronics.html", timeout=60000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(5000)
-            items = await page.query_selector_all('.multi--titleText--nXeOvyr') 
-            prices = await page.query_selector_all('.multi--price-sale--U-S0jtG')
-            msg = "🔥 *أفضل المنتجات مبيعاً اليوم:*\n\n"
-            for i in range(min(3, len(items), len(prices))):
-                title = await items[i].inner_text()
-                price = await prices[i].inner_text()
-                msg += f"{i+1}. *{title}*\n💰 السعر: {price}\n\n"
-            if bot and TELEGRAM_CHAT_ID:
-                bot.send_message(TELEGRAM_CHAT_ID, msg, parse_mode='Markdown')
-                print("✅ تم إرسال التقرير للتلغرام.")
-        except Exception as e:
-            print(f"❌ خطأ بالصيد: {e}")
-        finally:
-            await browser.close()
-
-# --- 4. إدارة التلغرام ---
+# --- بوت التلغرام ---
 if bot:
     @bot.message_handler(func=lambda message: True)
     def handle_message(message):
         user_text = message.text
-        if "صيد" in user_text or "منتجات" in user_text:
-            bot.reply_to(message, "تمام، جاري البحث عن منتجات رابحة... استنى شوي.")
-            asyncio.run(hunt_aliexpress())
-            return
-
         if not ai_client:
-            bot.reply_to(message, "أهلاً بك! أنا جهاد آي. للبحث عن المنتجات اكتب: صيد")
+            bot.reply_to(message, "أهلاً بك! أنا جهاد آي من AgentScan.")
             return
         
         prompt = f"""
@@ -151,17 +157,11 @@ if bot:
         except Exception as e:
             bot.reply_to(message, "عذراً، حدث خطأ تقني بسيط.")
 
-# --- 5. التشغيل ---
 if __name__ == "__main__":
     asyncio.run(run_scan())
-    
-    threading.Thread(target=lambda: asyncio.run(hunt_aliexpress()), daemon=True).start()
-    
     if bot:
-        print("📱 بوت التلغرام يقرأ الرسائل لمدة دقيقة...")
         t = threading.Thread(target=bot.polling, kwargs={'none_stop': True}, daemon=True)
         t.start()
         time.sleep(60)
-    
     print("🎉 انتهى كل شيء بنجاح.")
     sys.exit(0)
